@@ -117,11 +117,20 @@ enum Capture {
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 
+    static let shutter = NSSound(
+        contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif",
+        byReference: true)
+
+    static func playShutter() {
+        shutter?.stop()
+        shutter?.play()
+    }
+
     /// Lets the user drag a rectangle (or press space to pick a window) with the system UI.
-    static func interactiveScreenshot(to url: URL) async throws {
+    static func interactiveScreenshot(to url: URL, shutterSound: Bool) async throws {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        proc.arguments = ["-i", "-x", "-t", url.pathExtension.lowercased() == "jpg" ? "jpg" : "png", url.path]
+        proc.arguments = (shutterSound ? ["-i"] : ["-i", "-x"]) + ["-t", url.pathExtension.lowercased() == "jpg" ? "jpg" : "png", url.path]
         try proc.run()
         await withCheckedContinuation { cont in
             proc.terminationHandler = { _ in cont.resume() }

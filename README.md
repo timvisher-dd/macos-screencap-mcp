@@ -105,6 +105,7 @@ claude mcp add screencap --scope user -- "$PWD/.build/release/macos-screencap-mc
 
 Screenshot tools save full-resolution PNG files, or JPEG when `output_path` ends in `.jpg`. They also return a
 downscaled JPEG preview inline so the model can see the capture; pass `include_image: false` to skip it.
+Captures are silent; pass `shutter_sound: true` to play the macOS screenshot sound.
 
 Recordings are H.264 MP4 by default, or MOV when `output_path` ends in `.mov`. Above 4096 px they switch to
 HEVC automatically. Recording options: `fps` (default 30), `show_cursor` (default true), `system_audio`,

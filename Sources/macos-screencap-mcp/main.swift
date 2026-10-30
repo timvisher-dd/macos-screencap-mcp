@@ -31,6 +31,7 @@ func requestedExt(_ args: JSON, _ allowed: [String], default def: String) -> Str
 }
 let includeImageProp: JSON = ["type": "boolean", "description": "Return a downscaled preview of the image inline. Default true."]
 let showCursorProp: JSON = ["type": "boolean", "description": "Include the mouse cursor."]
+let shutterSoundProp: JSON = ["type": "boolean", "description": "Play the macOS screenshot sound. Default false."]
 
 func screenshotResult(_ image: CGImage, url: URL, extra: JSON, includeImage: Bool) -> [JSON] {
     var info = extra
@@ -127,6 +128,7 @@ let tools: [Tool] = [
             "display_id": ["type": "integer", "description": "Display to capture from. Defaults to the display containing the rectangle, or the main display."],
             "interactive": ["type": "boolean", "description": "Let the user select the region with the macOS crosshair (blocks until they finish or press Esc)."],
             "show_cursor": showCursorProp,
+            "shutter_sound": shutterSoundProp,
             "include_image": includeImageProp,
             "output_path": outputPathProp,
         ])
@@ -137,7 +139,7 @@ let tools: [Tool] = [
         if args.bool("interactive") == true {
             let url = try outputURL(args.string("output_path"), name: args.string("name"), fallback: ["selection"],
                                     ext: ext)
-            try await Capture.interactiveScreenshot(to: url)
+            try await Capture.interactiveScreenshot(to: url, shutterSound: args.bool("shutter_sound") ?? false)
             return screenshotResult(try Capture.loadImage(url), url: url, extra: ["mode": "interactive"], includeImage: includeImage)
         }
 
@@ -173,6 +175,7 @@ let tools: [Tool] = [
         let local = captureRect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
         let image = try await Capture.screenshot(filter: filter, sourceRect: local, size: captureRect.size,
                                                  showCursor: args.bool("show_cursor") ?? false)
+        if args.bool("shutter_sound") == true { Capture.playShutter() }
 
         // Without a caller-supplied name, name the file after the frontmost window under the region.
         let fallbackName: [String?]
@@ -196,6 +199,7 @@ let tools: [Tool] = [
         description: "Capture a single window (even if partially covered by other windows). Identify it by window_id, or by app and/or title substring. \(namingHint)",
         inputSchema: schema(windowSelector.merging([
             "name": nameProp,
+            "shutter_sound": shutterSoundProp,
             "include_image": includeImageProp,
             "output_path": outputPathProp,
         ]) { a, _ in a })
@@ -204,6 +208,7 @@ let tools: [Tool] = [
         let window = try Capture.findWindow(args, in: content)
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let image = try await Capture.screenshot(filter: filter, size: filter.contentRect.size, showCursor: false)
+        if args.bool("shutter_sound") == true { Capture.playShutter() }
         let url = try outputURL(args.string("output_path"), name: args.string("name"),
                                 fallback: [window.owningApplication?.applicationName, window.title],
                                 ext: requestedExt(args, ["png", "jpg"], default: "png"))
