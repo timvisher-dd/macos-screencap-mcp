@@ -96,9 +96,9 @@ claude mcp add screencap --scope user -- "$PWD/.build/release/macos-screencap-mc
 | Tool | What it does |
 |---|---|
 | `list_displays` | Display ids, frames (global points), pixel scale |
-| `list_windows` | On-screen app windows, frontmost first: `window_id`, app, title, frame. Optional `app` filter |
+| `list_windows` | App windows on every Space, on-screen ones frontmost first: `window_id`, app, title, frame, `on_screen`. Untitled off-screen windows are omitted. Optional `app` filter |
 | `screenshot_region` | Capture `x, y, width, height` (global points), or a whole display if the rect is omitted, or `interactive: true` to let the user drag-select |
-| `screenshot_window` | Capture one window by `window_id`, or by `app` / `title` substring (frontmost match). The window is captured even when other windows cover it |
+| `screenshot_window` | Capture one window by `window_id`, or by `app` / `title` substring (frontmost match). The window is captured even when other windows cover it or it is on another Space |
 | `start_recording` | `target: "display"` (with optional `display_id`) or `target: "window"` (`window_id` / `app` / `title`). With `duration_seconds` the call blocks and returns the finished file. Without it, the call returns a `recording_id` |
 | `stop_recording` | Finalize a recording. `recording_id` is optional when only one recording is active |
 | `list_recordings` | Show the recordings that are in progress |
@@ -152,8 +152,8 @@ finalizes them first so the files stay playable.
 - **"Could not read screen content"**: the app that launched the server lacks Screen Recording permission. Grant it
   under System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen that app.
   Permission belongs to the launching app (e.g. Terminal), not to this binary.
-- **A window can't be found**: only on-screen windows are listed, so minimized windows and windows on other Spaces
-  don't appear. Call `list_windows` to see what is available.
+- **A window can't be found**: off-screen windows without a title are not listed. Call `list_windows` to see what
+  is available; `on_screen: false` covers windows on other Spaces as well as hidden and minimized ones.
 - **Interactive capture returns "cancelled"**: the user pressed Esc, or no one was at the screen to make a
   selection.
 

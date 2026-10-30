@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 enum Capture {
     static func shareableContent() async throws -> SCShareableContent {
         do {
-            return try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            return try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
         } catch {
             throw ToolError("""
                 Could not read screen content: \(error.localizedDescription)
@@ -41,7 +41,9 @@ enum Capture {
 
     // MARK: Windows
 
-    /// Normal (layer 0) app windows, ordered front-to-back.
+    /// Normal (layer 0) app windows on every Space: on-screen windows front-to-back, then off-screen ones by app.
+    /// Untitled off-screen windows are left out: they are mostly invisible helpers (per-Space menu bar strips,
+    /// cursor and autofill panels) and would bury the real windows on other Spaces.
     static func appWindows(in content: SCShareableContent) -> [SCWindow] {
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [JSON] ?? []
@@ -53,14 +55,19 @@ enum Capture {
         }
         return content.windows
             .filter { $0.windowLayer == 0 && $0.owningApplication != nil && $0.frame.width >= 40 && $0.frame.height >= 40 }
-            .sorted { (rank[$0.windowID] ?? .max) < (rank[$1.windowID] ?? .max) }
+            .filter { $0.isOnScreen || !($0.title ?? "").isEmpty }
+            .sorted {
+                let (a, b) = (rank[$0.windowID] ?? .max, rank[$1.windowID] ?? .max)
+                if a != b { return a < b }
+                return ($0.owningApplication?.applicationName ?? "", $0.windowID) < ($1.owningApplication?.applicationName ?? "", $1.windowID)
+            }
     }
 
     /// Resolve a window from `window_id`, or the frontmost window matching `app` and/or `title` substrings.
     static func findWindow(_ args: JSON, in content: SCShareableContent) throws -> SCWindow {
         if let id = args.int("window_id") {
             guard let w = content.windows.first(where: { $0.windowID == CGWindowID(id) }) else {
-                throw ToolError("No on-screen window with id \(id). Use list_windows to see available windows.")
+                throw ToolError("No window with id \(id). Use list_windows to see available windows.")
             }
             return w
         }
@@ -78,7 +85,7 @@ enum Capture {
             return appOK && titleOK
         }
         guard let match else {
-            throw ToolError("No on-screen window matched app=\(app ?? "*") title=\(title ?? "*"). Use list_windows.")
+            throw ToolError("No window matched app=\(app ?? "*") title=\(title ?? "*"). Use list_windows.")
         }
         return match
     }
@@ -92,6 +99,7 @@ enum Capture {
             "title": w.title ?? "",
             "frame": rectJSON(w.frame),
             "is_active": w.isActive,
+            "on_screen": w.isOnScreen,
         ]
     }
 

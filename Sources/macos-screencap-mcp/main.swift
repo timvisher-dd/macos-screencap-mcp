@@ -95,7 +95,7 @@ let tools: [Tool] = [
 
     Tool(
         name: "list_windows",
-        description: "List on-screen application windows, frontmost first, with window ids, app names, titles and frames (global points).",
+        description: "List application windows on every Space, on-screen ones frontmost first, with window ids, app names, titles, frames (global points) and whether each is on screen. Windows on other Spaces can be captured with screenshot_window without switching to them.",
         inputSchema: schema([
             "app": ["type": "string", "description": "Only include windows whose app name or bundle id contains this (case-insensitive)."],
         ])
@@ -177,7 +177,7 @@ let tools: [Tool] = [
         // Without a caller-supplied name, name the file after the frontmost window under the region.
         let fallbackName: [String?]
         if rect != nil, let w = Capture.appWindows(in: content).first(where: {
-            $0.frame.contains(CGPoint(x: captureRect.midX, y: captureRect.midY))
+            $0.isOnScreen && $0.frame.contains(CGPoint(x: captureRect.midX, y: captureRect.midY))
         }) {
             fallbackName = [w.owningApplication?.applicationName, w.title]
         } else {
