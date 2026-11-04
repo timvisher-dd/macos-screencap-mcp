@@ -96,15 +96,16 @@ claude mcp add screencap --scope user -- "$PWD/.build/release/macos-screencap-mc
 | Tool | What it does |
 |---|---|
 | `list_displays` | Display ids, frames (global points), pixel scale |
-| `list_windows` | On-screen app windows, frontmost first: `window_id`, app, title, frame. Optional `app` filter |
+| `list_windows` | App windows on every Space, on-screen ones frontmost first: `window_id`, app, title, frame, `on_screen`. Untitled off-screen windows are omitted. Optional `app` filter |
 | `screenshot_region` | Capture `x, y, width, height` (global points), or a whole display if the rect is omitted, or `interactive: true` to let the user drag-select |
-| `screenshot_window` | Capture one window by `window_id`, or by `app` / `title` substring (frontmost match). The window is captured even when other windows cover it |
+| `screenshot_window` | Capture one window by `window_id`, or by `app` / `title` substring (frontmost match). The window is captured even when other windows cover it or it is on another Space |
 | `start_recording` | `target: "display"` (with optional `display_id`) or `target: "window"` (`window_id` / `app` / `title`). With `duration_seconds` the call blocks and returns the finished file. Without it, the call returns a `recording_id` |
 | `stop_recording` | Finalize a recording. `recording_id` is optional when only one recording is active |
 | `list_recordings` | Show the recordings that are in progress |
 
 Screenshot tools save full-resolution PNG files, or JPEG when `output_path` ends in `.jpg`. They also return a
 downscaled JPEG preview inline so the model can see the capture; pass `include_image: false` to skip it.
+Captures are silent; pass `shutter_sound: true` to play the macOS screenshot sound.
 
 Recordings are H.264 MP4 by default, or MOV when `output_path` ends in `.mov`. Above 4096 px they switch to
 HEVC automatically. Recording options: `fps` (default 30), `show_cursor` (default true), `system_audio`,
@@ -152,8 +153,17 @@ finalizes them first so the files stay playable.
 - **"Could not read screen content"**: the app that launched the server lacks Screen Recording permission. Grant it
   under System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen that app.
   Permission belongs to the launching app (e.g. Terminal), not to this binary.
-- **A window can't be found**: only on-screen windows are listed, so minimized windows and windows on other Spaces
-  don't appear. Call `list_windows` to see what is available.
+- **A window can't be found**: off-screen windows without a title are not listed. Call `list_windows` to see what
+  is available; `on_screen: false` covers windows on other Spaces as well as hidden and minimized ones.
+- **"ScreenCaptureKit/replayd did not respond within 15s"**: `replayd`, the per-user daemon behind
+  ScreenCaptureKit, isn't answering. Window screenshots fall back to SkyLight's `CGSHWCaptureWindowList`, then to
+  `/usr/sbin/screencapture`; region screenshots go straight to `screencapture`. Either way the result says so in a
+  `fallback` field. Listing tools return the error. `killall replayd` restarts the daemon (launchd respawns it).
+  Set `SCREENCAP_SCK_TIMEOUT` (seconds) to change the wait, and `SCREENCAP_DISCOVERY_TIMEOUT` (default 5) for
+  the window and display list.
+- **"other screen captures are already running on this machine"**: every server on the machine shares
+  `SCREENCAP_MAX_CAPTURES` capture slots (default 1), and none came free within `SCREENCAP_SLOT_WAIT` seconds
+  (default 30). The slot files live in `~/.local/state/macos-screencap-mcp` (or `$XDG_STATE_HOME`).
 - **Interactive capture returns "cancelled"**: the user pressed Esc, or no one was at the screen to make a
   selection.
 
@@ -163,11 +173,24 @@ The server speaks MCP's newline-delimited JSON-RPC over stdin/stdout. All loggin
 use `SCScreenshotManager`. Recordings use an `SCStream` with an `SCRecordingOutput`, which writes the video file
 directly. Interactive selection hands off to the system `screencapture -i` tool.
 
+Listing and screenshot calls run in a short-lived copy of the binary (`macos-screencap-mcp --worker <tool>`), so
+the long-lived server never opens a ScreenCaptureKit connection. Once a process has used ScreenCaptureKit, ReplayKit
+keeps a connection to `replayd` until the process exits. If `replayd` stops answering a request, that client
+reconnects every time the connection drops, hundreds of times a second, and the request can't be cancelled. A
+worker that doesn't reply within `SCREENCAP_SCK_TIMEOUT` seconds (default 15) is killed, which ends its
+connection. Recordings run in the server, with the same timeout on starting and stopping the stream.
+[docs/capture-design.md](docs/capture-design.md) covers the rules the capture path follows and why.
+
 | File | Contents |
 |---|---|
 | `Sources/macos-screencap-mcp/MCPServer.swift` | MCP protocol over stdio |
 | `Sources/macos-screencap-mcp/Capture.swift` | Displays, windows, screenshots, file naming |
 | `Sources/macos-screencap-mcp/Recording.swift` | Screen and window recording |
+| `Sources/macos-screencap-mcp/Worker.swift` | Worker subprocess and the fallbacks |
+| `Sources/macos-screencap-mcp/SkyLight.swift` | `CGSHWCaptureWindowList`, the first window fallback |
+| `Sources/macos-screencap-mcp/SingleFlight.swift` | One window-list request in flight, with a watchdog |
+| `Sources/macos-screencap-mcp/CaptureSlots.swift` | Machine-wide cap on concurrent captures |
+| `Sources/macos-screencap-mcp/Timeout.swift` | Timeouts for ScreenCaptureKit calls and subprocesses |
 | `Sources/macos-screencap-mcp/main.swift` | Tool definitions |
 | `scripts/build-binary.sh` | Builds the universal binary for the npm package |
 

@@ -5,9 +5,21 @@ import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 enum Capture {
+    static let discovery = SingleFlight<SCShareableContent>("SCShareableContent", watchdog: discoveryTimeout) { done in
+        SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: false) { content, error in
+            if let content {
+                done(.success(content))
+            } else {
+                done(.failure(error ?? ToolError("ScreenCaptureKit returned no content and no error.")))
+            }
+        }
+    }
+
     static func shareableContent() async throws -> SCShareableContent {
         do {
-            return try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+            return try await discovery.value()
+        } catch let timeout as SCKTimeout {
+            throw timeout
         } catch {
             throw ToolError("""
                 Could not read screen content: \(error.localizedDescription)
@@ -41,7 +53,9 @@ enum Capture {
 
     // MARK: Windows
 
-    /// Normal (layer 0) app windows, ordered front-to-back.
+    /// Normal (layer 0) app windows on every Space: on-screen windows front-to-back, then off-screen ones by app.
+    /// Untitled off-screen windows are left out: they are mostly invisible helpers (per-Space menu bar strips,
+    /// cursor and autofill panels) and would bury the real windows on other Spaces.
     static func appWindows(in content: SCShareableContent) -> [SCWindow] {
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [JSON] ?? []
@@ -53,14 +67,19 @@ enum Capture {
         }
         return content.windows
             .filter { $0.windowLayer == 0 && $0.owningApplication != nil && $0.frame.width >= 40 && $0.frame.height >= 40 }
-            .sorted { (rank[$0.windowID] ?? .max) < (rank[$1.windowID] ?? .max) }
+            .filter { $0.isOnScreen || !($0.title ?? "").isEmpty }
+            .sorted {
+                let (a, b) = (rank[$0.windowID] ?? .max, rank[$1.windowID] ?? .max)
+                if a != b { return a < b }
+                return ($0.owningApplication?.applicationName ?? "", $0.windowID) < ($1.owningApplication?.applicationName ?? "", $1.windowID)
+            }
     }
 
     /// Resolve a window from `window_id`, or the frontmost window matching `app` and/or `title` substrings.
     static func findWindow(_ args: JSON, in content: SCShareableContent) throws -> SCWindow {
         if let id = args.int("window_id") {
             guard let w = content.windows.first(where: { $0.windowID == CGWindowID(id) }) else {
-                throw ToolError("No on-screen window with id \(id). Use list_windows to see available windows.")
+                throw ToolError("No window with id \(id). Use list_windows to see available windows.")
             }
             return w
         }
@@ -78,7 +97,7 @@ enum Capture {
             return appOK && titleOK
         }
         guard let match else {
-            throw ToolError("No on-screen window matched app=\(app ?? "*") title=\(title ?? "*"). Use list_windows.")
+            throw ToolError("No window matched app=\(app ?? "*") title=\(title ?? "*"). Use list_windows.")
         }
         return match
     }
@@ -92,16 +111,25 @@ enum Capture {
             "title": w.title ?? "",
             "frame": rectJSON(w.frame),
             "is_active": w.isActive,
+            "on_screen": w.isOnScreen,
         ]
     }
 
     // MARK: Screenshots
 
+    /// On macOS 26+ this uses captureScreenshot. captureImage (like captureSampleBuffer) builds and tears down an
+    /// SCStream for every call, which costs replayd and WindowServer a stream setup per screenshot.
     static func screenshot(filter: SCContentFilter, sourceRect: CGRect? = nil, size: CGSize, showCursor: Bool) async throws -> CGImage {
+        let pixels = pixelSize(size, scale: CGFloat(filter.pointPixelScale))
+        if #available(macOS 26.0, *) {
+            let config = screenshotConfiguration(pixels: pixels, sourceRect: sourceRect, showCursor: showCursor)
+            let output = try await SCScreenshotManager.captureScreenshot(contentFilter: filter, configuration: config)
+            guard let image = output.sdrImage else { throw ToolError("ScreenCaptureKit returned no image.") }
+            return image
+        }
         let config = SCStreamConfiguration()
-        let scale = CGFloat(filter.pointPixelScale)
-        config.width = max(1, Int((size.width * scale).rounded()))
-        config.height = max(1, Int((size.height * scale).rounded()))
+        config.width = pixels.width
+        config.height = pixels.height
         if let sourceRect { config.sourceRect = sourceRect }
         config.showsCursor = showCursor
         config.captureResolution = .best
@@ -109,11 +137,36 @@ enum Capture {
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 
+    static func pixelSize(_ size: CGSize, scale: CGFloat) -> (width: Int, height: Int) {
+        (max(1, Int((size.width * scale).rounded())), max(1, Int((size.height * scale).rounded())))
+    }
+
+    @available(macOS 26.0, *)
+    static func screenshotConfiguration(pixels: (width: Int, height: Int), sourceRect: CGRect?, showCursor: Bool) -> SCScreenshotConfiguration {
+        let config = SCScreenshotConfiguration()
+        config.width = pixels.width
+        config.height = pixels.height
+        if let sourceRect { config.sourceRect = sourceRect }
+        config.showsCursor = showCursor
+        config.ignoreShadows = true
+        config.dynamicRange = .sdr
+        return config
+    }
+
+    static let shutter = NSSound(
+        contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif",
+        byReference: true)
+
+    static func playShutter() {
+        shutter?.stop()
+        shutter?.play()
+    }
+
     /// Lets the user drag a rectangle (or press space to pick a window) with the system UI.
-    static func interactiveScreenshot(to url: URL) async throws {
+    static func interactiveScreenshot(to url: URL, shutterSound: Bool) async throws {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        proc.arguments = ["-i", "-x", "-t", url.pathExtension.lowercased() == "jpg" ? "jpg" : "png", url.path]
+        proc.arguments = (shutterSound ? ["-i"] : ["-i", "-x"]) + ["-t", url.pathExtension.lowercased() == "jpg" ? "jpg" : "png", url.path]
         try proc.run()
         await withCheckedContinuation { cont in
             proc.terminationHandler = { _ in cont.resume() }

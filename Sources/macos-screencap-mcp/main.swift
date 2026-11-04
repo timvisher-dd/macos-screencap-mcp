@@ -3,6 +3,8 @@ import ScreenCaptureKit
 
 // Connect to the window server so ScreenCaptureKit works from a command-line process.
 _ = NSApplication.shared
+// Writing to a worker that was killed on timeout must not kill the server.
+signal(SIGPIPE, SIG_IGN)
 
 let recordings = RecordingStore()
 
@@ -31,6 +33,7 @@ func requestedExt(_ args: JSON, _ allowed: [String], default def: String) -> Str
 }
 let includeImageProp: JSON = ["type": "boolean", "description": "Return a downscaled preview of the image inline. Default true."]
 let showCursorProp: JSON = ["type": "boolean", "description": "Include the mouse cursor."]
+let shutterSoundProp: JSON = ["type": "boolean", "description": "Play the macOS screenshot sound. Default false."]
 
 func screenshotResult(_ image: CGImage, url: URL, extra: JSON, includeImage: Bool) -> [JSON] {
     var info = extra
@@ -83,7 +86,7 @@ func startRecording(_ args: JSON) async throws -> Recording {
     return recording
 }
 
-let tools: [Tool] = [
+let inProcessTools: [Tool] = [
     Tool(
         name: "list_displays",
         description: "List connected displays with their ids, frames (in global points, origin at top-left of the main display), and pixel scale.",
@@ -95,7 +98,7 @@ let tools: [Tool] = [
 
     Tool(
         name: "list_windows",
-        description: "List on-screen application windows, frontmost first, with window ids, app names, titles and frames (global points).",
+        description: "List application windows on every Space, on-screen ones frontmost first, with window ids, app names, titles, frames (global points) and whether each is on screen. Windows on other Spaces can be captured with screenshot_window without switching to them.",
         inputSchema: schema([
             "app": ["type": "string", "description": "Only include windows whose app name or bundle id contains this (case-insensitive)."],
         ])
@@ -127,6 +130,7 @@ let tools: [Tool] = [
             "display_id": ["type": "integer", "description": "Display to capture from. Defaults to the display containing the rectangle, or the main display."],
             "interactive": ["type": "boolean", "description": "Let the user select the region with the macOS crosshair (blocks until they finish or press Esc)."],
             "show_cursor": showCursorProp,
+            "shutter_sound": shutterSoundProp,
             "include_image": includeImageProp,
             "output_path": outputPathProp,
         ])
@@ -137,7 +141,7 @@ let tools: [Tool] = [
         if args.bool("interactive") == true {
             let url = try outputURL(args.string("output_path"), name: args.string("name"), fallback: ["selection"],
                                     ext: ext)
-            try await Capture.interactiveScreenshot(to: url)
+            try await Capture.interactiveScreenshot(to: url, shutterSound: args.bool("shutter_sound") ?? false)
             return screenshotResult(try Capture.loadImage(url), url: url, extra: ["mode": "interactive"], includeImage: includeImage)
         }
 
@@ -173,11 +177,12 @@ let tools: [Tool] = [
         let local = captureRect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
         let image = try await Capture.screenshot(filter: filter, sourceRect: local, size: captureRect.size,
                                                  showCursor: args.bool("show_cursor") ?? false)
+        if args.bool("shutter_sound") == true { Capture.playShutter() }
 
         // Without a caller-supplied name, name the file after the frontmost window under the region.
         let fallbackName: [String?]
         if rect != nil, let w = Capture.appWindows(in: content).first(where: {
-            $0.frame.contains(CGPoint(x: captureRect.midX, y: captureRect.midY))
+            $0.isOnScreen && $0.frame.contains(CGPoint(x: captureRect.midX, y: captureRect.midY))
         }) {
             fallbackName = [w.owningApplication?.applicationName, w.title]
         } else {
@@ -196,6 +201,7 @@ let tools: [Tool] = [
         description: "Capture a single window (even if partially covered by other windows). Identify it by window_id, or by app and/or title substring. \(namingHint)",
         inputSchema: schema(windowSelector.merging([
             "name": nameProp,
+            "shutter_sound": shutterSoundProp,
             "include_image": includeImageProp,
             "output_path": outputPathProp,
         ]) { a, _ in a })
@@ -204,6 +210,7 @@ let tools: [Tool] = [
         let window = try Capture.findWindow(args, in: content)
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let image = try await Capture.screenshot(filter: filter, size: filter.contentRect.size, showCursor: false)
+        if args.bool("shutter_sound") == true { Capture.playShutter() }
         let url = try outputURL(args.string("output_path"), name: args.string("name"),
                                 fallback: [window.owningApplication?.applicationName, window.title],
                                 ext: requestedExt(args, ["png", "jpg"], default: "png"))
@@ -263,6 +270,19 @@ let tools: [Tool] = [
 
 extension CGRect {
     var area: CGFloat { isNull ? 0 : width * height }
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == Worker.flag {
+    Worker.serve(CommandLine.arguments[2], from: inProcessTools + [Fallback.skyLightWindowTool])
+}
+
+let workerFallbacks: [String: (JSON, SCKTimeout) async throws -> [JSON]] = [
+    "screenshot_region": Fallback.region,
+    "screenshot_window": Fallback.window,
+]
+let workerTools: Set = ["list_displays", "list_windows", "screenshot_region", "screenshot_window"]
+let tools = inProcessTools.map { t in
+    workerTools.contains(t.name) ? Worker.wrap(t, fallback: workerFallbacks[t.name]) : t
 }
 
 MCPServer(name: "macos-screencap-mcp", version: serverVersion, tools: tools) {
