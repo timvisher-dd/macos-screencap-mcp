@@ -273,7 +273,7 @@ extension CGRect {
 }
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == Worker.flag {
-    Worker.serve(CommandLine.arguments[2], from: inProcessTools)
+    Worker.serve(CommandLine.arguments[2], from: inProcessTools + [Fallback.skyLightWindowTool])
 }
 
 let workerFallbacks: [String: (JSON, SCKTimeout) async throws -> [JSON]] = [

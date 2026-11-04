@@ -10,11 +10,11 @@ import CoreGraphics
 enum Worker {
     static let flag = "--worker"
 
-    static func run(_ tool: String, _ args: JSON) async throws -> [JSON] {
+    static func run(_ tool: String, _ args: JSON, timeout: Double = sckTimeout) async throws -> [JSON] {
         guard let exe = Bundle.main.executablePath else { throw ToolError("Cannot locate the server executable.") }
         let input = try JSONSerialization.data(withJSONObject: args)
-        let result = try await runProcess(exe, [flag, tool], stdin: input, timeout: sckTimeout)
-        if result.timedOut { throw SCKTimeout(what: tool, seconds: sckTimeout) }
+        let result = try await runProcess(exe, [flag, tool], stdin: input, timeout: timeout)
+        if result.timedOut { throw SCKTimeout(what: tool, seconds: timeout) }
         guard let reply = (try? JSONSerialization.jsonObject(with: result.stdout)) as? JSON else {
             throw ToolError("\(tool) worker exited with status \(result.status) and no reply.")
         }
@@ -72,12 +72,43 @@ enum Worker {
     }
 }
 
-/// /usr/sbin/screencapture, used when ScreenCaptureKit times out. It doesn't share this process's replayd
-/// connection, but it may still depend on replayd, so it gets a timeout too.
+/// What runs when ScreenCaptureKit times out. Windows try SkyLight's CGSHWCaptureWindowList first, in a worker,
+/// since it goes straight to WindowServer; then /usr/sbin/screencapture, which doesn't share this process's
+/// replayd connection but may still depend on replayd. Each gets its own timeout.
 enum Fallback {
     static let timeout: Double = 15
+    static let skyLightTool = "skylight_window"
 
     static func window(_ args: JSON, _ cause: SCKTimeout) async throws -> [JSON] {
+        if SkyLight.isAvailable {
+            var skyLightArgs = args
+            skyLightArgs["shutter_sound"] = nil
+            skyLightArgs["fallback_note"] = note(cause, via: "CGSHWCaptureWindowList")
+            do {
+                return try await Worker.run(skyLightTool, skyLightArgs, timeout: timeout)
+            } catch {
+                log("CGSHWCaptureWindowList fallback failed, trying screencapture: \(error)")
+            }
+        }
+        return try await screencaptureWindow(args, cause)
+    }
+
+    /// Worker side of the SkyLight fallback; not offered to MCP clients.
+    static let skyLightWindowTool = Tool(name: skyLightTool, description: "", inputSchema: [:]) { args in
+        let info = try cgWindow(args)
+        let id = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
+        let owner = info[kCGWindowOwnerName as String] as? String
+        let title = info[kCGWindowName as String] as? String
+        let image = try SkyLight.captureWindow(id)
+        let url = try outputURL(args.string("output_path"), name: args.string("name"), fallback: [owner, title],
+                                ext: requestedExt(args, ["png", "jpg"], default: "png"))
+        try Capture.save(image, to: url)
+        let window: JSON = ["window_id": Int(id), "app": owner ?? "", "title": title ?? ""]
+        return screenshotResult(image, url: url, extra: ["window": window, "fallback": args.string("fallback_note") ?? ""],
+                                includeImage: args.bool("include_image") ?? true)
+    }
+
+    static func screencaptureWindow(_ args: JSON, _ cause: SCKTimeout) async throws -> [JSON] {
         let info = try cgWindow(args)
         let id = (info[kCGWindowNumber as String] as? NSNumber)?.intValue ?? 0
         let owner = info[kCGWindowOwnerName as String] as? String
@@ -111,8 +142,8 @@ enum Fallback {
                                 includeImage: args.bool("include_image") ?? true)
     }
 
-    private static func note(_ cause: SCKTimeout) -> String {
-        "Captured with /usr/sbin/screencapture because \(cause.what) timed out after \(String(format: "%g", cause.seconds))s in ScreenCaptureKit."
+    static func note(_ cause: SCKTimeout, via method: String = "/usr/sbin/screencapture") -> String {
+        "Captured with \(method) because \(cause.what) timed out after \(String(format: "%g", cause.seconds))s in ScreenCaptureKit."
     }
 
     private static func screencapture(_ flags: [String], ext: String, to url: URL, cause: SCKTimeout) async throws {
@@ -126,7 +157,7 @@ enum Fallback {
     }
 
     /// The window to capture, found with CoreGraphics so it doesn't touch ScreenCaptureKit.
-    private static func cgWindow(_ args: JSON) throws -> JSON {
+    static func cgWindow(_ args: JSON) throws -> JSON {
         let all = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [JSON] ?? []
         if let id = args.int("window_id") {
             guard let w = all.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.intValue == id }) else {
