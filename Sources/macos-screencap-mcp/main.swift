@@ -3,6 +3,8 @@ import ScreenCaptureKit
 
 // Connect to the window server so ScreenCaptureKit works from a command-line process.
 _ = NSApplication.shared
+// Writing to a worker that was killed on timeout must not kill the server.
+signal(SIGPIPE, SIG_IGN)
 
 let recordings = RecordingStore()
 
@@ -84,7 +86,7 @@ func startRecording(_ args: JSON) async throws -> Recording {
     return recording
 }
 
-let tools: [Tool] = [
+let inProcessTools: [Tool] = [
     Tool(
         name: "list_displays",
         description: "List connected displays with their ids, frames (in global points, origin at top-left of the main display), and pixel scale.",
@@ -268,6 +270,19 @@ let tools: [Tool] = [
 
 extension CGRect {
     var area: CGFloat { isNull ? 0 : width * height }
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == Worker.flag {
+    Worker.serve(CommandLine.arguments[2], from: inProcessTools)
+}
+
+let workerFallbacks: [String: (JSON, SCKTimeout) async throws -> [JSON]] = [
+    "screenshot_region": Fallback.region,
+    "screenshot_window": Fallback.window,
+]
+let workerTools: Set = ["list_displays", "list_windows", "screenshot_region", "screenshot_window"]
+let tools = inProcessTools.map { t in
+    workerTools.contains(t.name) ? Worker.wrap(t, fallback: workerFallbacks[t.name]) : t
 }
 
 MCPServer(name: "macos-screencap-mcp", version: serverVersion, tools: tools) {

@@ -155,6 +155,10 @@ finalizes them first so the files stay playable.
   Permission belongs to the launching app (e.g. Terminal), not to this binary.
 - **A window can't be found**: off-screen windows without a title are not listed. Call `list_windows` to see what
   is available; `on_screen: false` covers windows on other Spaces as well as hidden and minimized ones.
+- **"ScreenCaptureKit/replayd did not respond within 15s"**: `replayd`, the per-user daemon behind
+  ScreenCaptureKit, isn't answering. Screenshots fall back to `/usr/sbin/screencapture` and say so in a `fallback`
+  field; listing tools return the error. `killall replayd` restarts the daemon (launchd respawns it). Set
+  `SCREENCAP_SCK_TIMEOUT` (seconds) to change the wait.
 - **Interactive capture returns "cancelled"**: the user pressed Esc, or no one was at the screen to make a
   selection.
 
@@ -164,11 +168,20 @@ The server speaks MCP's newline-delimited JSON-RPC over stdin/stdout. All loggin
 use `SCScreenshotManager`. Recordings use an `SCStream` with an `SCRecordingOutput`, which writes the video file
 directly. Interactive selection hands off to the system `screencapture -i` tool.
 
+Listing and screenshot calls run in a short-lived copy of the binary (`macos-screencap-mcp --worker <tool>`), so
+the long-lived server never opens a ScreenCaptureKit connection. Once a process has used ScreenCaptureKit, ReplayKit
+keeps a connection to `replayd` until the process exits. If `replayd` stops answering a request, that client
+reconnects every time the connection drops, hundreds of times a second, and the request can't be cancelled. A
+worker that doesn't reply within `SCREENCAP_SCK_TIMEOUT` seconds (default 15) is killed, which ends its
+connection. Recordings run in the server, with the same timeout on starting and stopping the stream.
+
 | File | Contents |
 |---|---|
 | `Sources/macos-screencap-mcp/MCPServer.swift` | MCP protocol over stdio |
 | `Sources/macos-screencap-mcp/Capture.swift` | Displays, windows, screenshots, file naming |
 | `Sources/macos-screencap-mcp/Recording.swift` | Screen and window recording |
+| `Sources/macos-screencap-mcp/Worker.swift` | Worker subprocess and the `screencapture` fallback |
+| `Sources/macos-screencap-mcp/Timeout.swift` | Timeouts for ScreenCaptureKit calls and subprocesses |
 | `Sources/macos-screencap-mcp/main.swift` | Tool definitions |
 | `scripts/build-binary.sh` | Builds the universal binary for the npm package |
 
