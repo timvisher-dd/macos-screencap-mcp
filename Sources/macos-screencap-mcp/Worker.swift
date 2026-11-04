@@ -93,7 +93,6 @@ enum Fallback {
         return try await screencaptureWindow(args, cause)
     }
 
-    /// Worker side of the SkyLight fallback; not offered to MCP clients.
     static let skyLightWindowTool = Tool(name: skyLightTool, description: "", inputSchema: [:]) { args in
         let info = try cgWindow(args)
         let id = (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0

@@ -1,6 +1,5 @@
 import Foundation
 
-/// Seconds to wait for an SCShareableContent callback before expiring it. SCREENCAP_DISCOVERY_TIMEOUT overrides.
 let discoveryTimeout: Double = {
     guard let raw = ProcessInfo.processInfo.environment["SCREENCAP_DISCOVERY_TIMEOUT"], let s = Double(raw), 0 < s else { return 5 }
     return s
@@ -27,7 +26,6 @@ final class SingleFlight<T>: @unchecked Sendable {
         self.fetch = fetch
     }
 
-    /// How many fetches have been started.
     var fetchCount: Int {
         lock.lock()
         defer { lock.unlock() }

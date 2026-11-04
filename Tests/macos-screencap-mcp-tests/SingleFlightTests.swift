@@ -2,7 +2,6 @@ import XCTest
 @testable import macos_screencap_mcp
 
 final class SingleFlightTests: XCTestCase {
-    /// Holds fetch callbacks until the test delivers them.
     final class Pending: @unchecked Sendable {
         private let lock = NSLock()
         private var callbacks: [(Result<Int, Error>) -> Void] = []

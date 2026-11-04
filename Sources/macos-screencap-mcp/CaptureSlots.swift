@@ -1,9 +1,7 @@
 import Foundation
 
-/// A machine-wide cap on concurrent listing and screenshot calls, shared by every server process, so dozens of
-/// per-session servers can't pile requests onto replayd at once. Each slot is a file locked with flock(2) rather
-/// than a lock directory or pid file: the kernel drops the lock when its holder exits, even on SIGKILL, so a
-/// killed worker or server never strands a slot.
+/// Each slot is a file locked with flock(2) rather than a lock directory or pid file: the kernel drops the lock when
+/// its holder exits, even on SIGKILL, so a killed worker or server never strands a slot.
 enum CaptureSlots {
     /// SCREENCAP_MAX_CAPTURES overrides. 1, not AltTab's 2: AltTab's two share one process, but two workers in
     /// separate processes starting at once made replayd stall discovery and fail TCC checks on macOS 26.7.
@@ -12,13 +10,11 @@ enum CaptureSlots {
         return n
     }()
 
-    /// How long to queue for a slot before giving up. SCREENCAP_SLOT_WAIT overrides.
     static let wait: Double = {
         guard let raw = ProcessInfo.processInfo.environment["SCREENCAP_SLOT_WAIT"], let s = Double(raw), 0 < s else { return 2 * sckTimeout }
         return s
     }()
 
-    /// $XDG_STATE_HOME/macos-screencap-mcp, or ~/.local/state/macos-screencap-mcp.
     static var directory: URL {
         let env = ProcessInfo.processInfo.environment
         let base = env["XDG_STATE_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }

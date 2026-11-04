@@ -1,9 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// SkyLight's private CGSHWCaptureWindowList, which asks WindowServer for a window's pixels directly, with no
-/// ScreenCaptureKit and no replayd. AltTab captures with it through macOS 15. It is looked up at run time rather
-/// than linked so a macOS release that drops it makes the fallback unavailable instead of the binary unlaunchable.
+/// SkyLight's private CGSHWCaptureWindowList reads a window from WindowServer without replayd. It is looked up at
+/// run time rather than linked so a macOS release that drops it disables the fallback instead of the binary.
 enum SkyLight {
     private typealias MainConnectionID = @convention(c) () -> Int32
     private typealias HWCaptureWindowList = @convention(c) (Int32, UnsafeMutablePointer<UInt32>, UInt32, UInt32) -> Unmanaged<CFArray>?
@@ -19,7 +18,6 @@ enum SkyLight {
 
     static var isAvailable: Bool { functions != nil }
 
-    /// CGSWindowCaptureOptions, as AltTab names them.
     static let ignoreGlobalClipShape: UInt32 = 1 << 11
     static let bestResolution: UInt32 = 1 << 8
     /// Keeps windows full size when Stage Manager would otherwise skew them.
