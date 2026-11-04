@@ -63,7 +63,9 @@ final class Recording: NSObject, SCStreamOutput {
 
     func start() async throws {
         do {
-            try await stream.startCapture()
+            try await withSCKTimeout("SCStream.startCapture") { try await self.stream.startCapture() }
+        } catch let timeout as SCKTimeout {
+            throw timeout
         } catch {
             throw ToolError("Failed to start recording: \(error.localizedDescription)")
         }
@@ -72,7 +74,11 @@ final class Recording: NSObject, SCStreamOutput {
 
     /// Stops capture and waits for the file to be finalized.
     func stop() async -> JSON {
-        do { try await stream.stopCapture() } catch { markFinished(error: error) }
+        do {
+            try await withSCKTimeout("SCStream.stopCapture") { try await self.stream.stopCapture() }
+        } catch {
+            markFinished(error: error)
+        }
 
         // Wait for recordingOutputDidFinishRecording, with a safety timeout.
         await withTaskGroup(of: Void.self) { group in

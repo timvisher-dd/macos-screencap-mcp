@@ -47,7 +47,7 @@ func startRecording(_ args: JSON) async throws -> Recording {
     guard let targetKind = args.string("target"), ["display", "window"].contains(targetKind) else {
         throw ToolError("target must be \"display\" or \"window\".")
     }
-    let content = try await Capture.shareableContent()
+    let content = try await withSCKTimeout("SCShareableContent") { try await Capture.shareableContent() }
     let filter: SCContentFilter
     let size: CGSize
     let target: JSON
