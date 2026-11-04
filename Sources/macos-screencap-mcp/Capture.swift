@@ -105,16 +105,40 @@ enum Capture {
 
     // MARK: Screenshots
 
+    /// On macOS 26+ this uses captureScreenshot. captureImage (like captureSampleBuffer) builds and tears down an
+    /// SCStream for every call, which costs replayd and WindowServer a stream setup per screenshot.
     static func screenshot(filter: SCContentFilter, sourceRect: CGRect? = nil, size: CGSize, showCursor: Bool) async throws -> CGImage {
+        let pixels = pixelSize(size, scale: CGFloat(filter.pointPixelScale))
+        if #available(macOS 26.0, *) {
+            let config = screenshotConfiguration(pixels: pixels, sourceRect: sourceRect, showCursor: showCursor)
+            let output = try await SCScreenshotManager.captureScreenshot(contentFilter: filter, configuration: config)
+            guard let image = output.sdrImage else { throw ToolError("ScreenCaptureKit returned no image.") }
+            return image
+        }
         let config = SCStreamConfiguration()
-        let scale = CGFloat(filter.pointPixelScale)
-        config.width = max(1, Int((size.width * scale).rounded()))
-        config.height = max(1, Int((size.height * scale).rounded()))
+        config.width = pixels.width
+        config.height = pixels.height
         if let sourceRect { config.sourceRect = sourceRect }
         config.showsCursor = showCursor
         config.captureResolution = .best
         config.ignoreShadowsSingleWindow = true
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    }
+
+    static func pixelSize(_ size: CGSize, scale: CGFloat) -> (width: Int, height: Int) {
+        (max(1, Int((size.width * scale).rounded())), max(1, Int((size.height * scale).rounded())))
+    }
+
+    @available(macOS 26.0, *)
+    static func screenshotConfiguration(pixels: (width: Int, height: Int), sourceRect: CGRect?, showCursor: Bool) -> SCScreenshotConfiguration {
+        let config = SCScreenshotConfiguration()
+        config.width = pixels.width
+        config.height = pixels.height
+        if let sourceRect { config.sourceRect = sourceRect }
+        config.showsCursor = showCursor
+        config.ignoreShadows = true
+        config.dynamicRange = .sdr
+        return config
     }
 
     static let shutter = NSSound(
