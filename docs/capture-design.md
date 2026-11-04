@@ -49,6 +49,10 @@ storm from rule 1 (old builds, from before workers):
 - With the binary location held constant, `captureImage` and `captureScreenshot` were equally fast, and `replayd`'s
   CPU didn't measurably differ. The storm's load hides any per-capture difference.
 - A capture stalled this way adds 7-8 s of `replayd` CPU over its 15 s timeout, with either API.
+- When the two stuck clients exited, `replayd` (same process, not restarted) dropped to 0% CPU and captures from
+  the installed path answered in about 1 s again. With `replayd` idle, 20 captures cost it at most 0.1 s of CPU
+  with either API, i.e. under 5 ms each; `captureScreenshot` took about 25 ms per capture and `captureImage`
+  32-38 ms.
 
 ## Next
 
