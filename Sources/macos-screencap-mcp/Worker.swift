@@ -56,6 +56,8 @@ enum Worker {
             // The worker exits as soon as it replies, which would cut the sound off.
             var workerArgs = args
             workerArgs["shutter_sound"] = nil
+            let slot = try await CaptureSlots.acquire()
+            defer { slot.release() }
             let content: [JSON]
             do {
                 content = try await run(t.name, workerArgs)
