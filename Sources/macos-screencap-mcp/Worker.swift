@@ -18,17 +18,27 @@ enum Worker {
         guard let reply = (try? JSONSerialization.jsonObject(with: result.stdout)) as? JSON else {
             throw ToolError("\(tool) worker exited with status \(result.status) and no reply.")
         }
+        if let what = reply["timeout"] as? String {
+            throw SCKTimeout(what: what, seconds: reply["timeout_seconds"] as? Double ?? sckTimeout)
+        }
         if let error = reply["error"] as? String { throw ToolError(error) }
         return reply["content"] as? [JSON] ?? []
     }
 
-    /// Worker side: reads the tool's arguments as JSON on stdin and writes `{"content": [...]}` or `{"error": "..."}`.
+    /// Worker side: reads the tool's arguments as JSON on stdin and writes `{"content": [...]}` or `{"error": "..."}`,
+    /// plus `timeout` and `timeout_seconds` when the error is an SCKTimeout.
     static func serve(_ tool: String, from tools: [Tool]) -> Never {
         let args = (try? JSONSerialization.jsonObject(with: FileHandle.standardInput.readDataToEndOfFile())) as? JSON ?? [:]
         Task {
             var reply: JSON
             if let t = tools.first(where: { $0.name == tool }) {
-                do { reply = ["content": try await t.handler(args)] } catch { reply = ["error": "\(error)"] }
+                do {
+                    reply = ["content": try await t.handler(args)]
+                } catch let timeout as SCKTimeout {
+                    reply = ["error": "\(timeout)", "timeout": timeout.what, "timeout_seconds": timeout.seconds]
+                } catch {
+                    reply = ["error": "\(error)"]
+                }
             } else {
                 reply = ["error": "Unknown worker tool \(tool)"]
             }

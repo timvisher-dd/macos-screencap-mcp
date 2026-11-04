@@ -5,9 +5,21 @@ import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 enum Capture {
+    static let discovery = SingleFlight<SCShareableContent>("SCShareableContent", watchdog: discoveryTimeout) { done in
+        SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: false) { content, error in
+            if let content {
+                done(.success(content))
+            } else {
+                done(.failure(error ?? ToolError("ScreenCaptureKit returned no content and no error.")))
+            }
+        }
+    }
+
     static func shareableContent() async throws -> SCShareableContent {
         do {
-            return try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false)
+            return try await discovery.value()
+        } catch let timeout as SCKTimeout {
+            throw timeout
         } catch {
             throw ToolError("""
                 Could not read screen content: \(error.localizedDescription)
